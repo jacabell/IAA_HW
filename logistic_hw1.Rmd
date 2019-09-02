@@ -1,0 +1,325 @@
+---
+title: "Logistic HW 1"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r, echo=F, message=F, warning=F}
+library(MASS)
+library(visreg)
+library(brglm)
+library(car)
+library(mgcv)
+library(haven)
+library(tidyverse)
+library(ggplot2)
+library(DescTools)
+
+file.dir <- "C:/Users/Jackson Cabell/Documents/Homework/Logistic/HW1/"
+input.file1 <- "insurance_t.sas7bdat"
+
+insurance <- read_sas(paste(file.dir, input.file1,sep = ""))
+```
+
+## Questions
+```
+Variables with less than 10 distinct levels are categorical? Ex: cashbk
+
+Is NSF binary or ordinal?
+
+ANOVA with 1-var model against null same as pearson chi sq? ANOVA() fcn with continous predictors? AKA are chi-sq tests only between two categorical variables.
+
+Calculating odds ratio: still doing 1 variable comparison at a time?
+
+Box-Tidwell func in R does vars one at a time regularly?
+```
+
+
+## Identify class of variables
+```{r, message=F, warning=F}
+#Continuous vars
+cvars <- c(
+  "ACCTAGE", "DDABAL", "DEP", "DEPAMT", "CHECKS", "NSFAMT", "PHONE", "TELLER", "SAVBAL", "ATMAMT", "POS", "POSAMT", "CDBAL", "IRABAL", "LOCBAL", "INVBAL", "ILSBAL", "MMBAL", "MTGBAL", "CCBAL", "INCOME", "LORES", "HMVAL", "AGE", "CRSCORE"
+)
+
+#Binary vars
+bvars <- c(
+  "DDA", "DIRDEP", "SAV", "ATM", "CD", "IRA", "LOC", "INV", "ILS", "MM", "MTG", "CC", "SDB", "HMOWN", "MOVED", "INAREA"
+)
+
+#Nominal vars
+nvars <- c(
+  "BRANCH", "RES"
+)
+
+#Ordinal vars cashbk mmcred ccpurc, nsf
+ovars <- c(
+  "CASHBK", "MMCRED", "CCPURC", "NSF"
+)
+
+#
+vars <- data.frame("VAR" = c(bvars, nvars, cvars, ovars), "BINARY" = numeric(47), "NOMINAL" = numeric(47), "CONTINUOUS" = numeric(47), "ORDINAL" = numeric(47), "TYPE"= numeric(47))
+
+vars <- vars %>% mutate(
+  BINARY = ifelse(VAR %in% bvars, 1, 0),
+  NOMINAL = ifelse(VAR %in% nvars, 1, 0),
+  CONTINUOUS = ifelse(VAR %in% cvars, 1, 0),
+  ORDINAL = ifelse(VAR %in% ovars, 1, 0)
+) %>% mutate(
+  TYPE = ifelse(BINARY==1, "BINARY", ifelse(NOMINAL==1, "NOMINAL", ifelse(CONTINUOUS==1, "CONTINUOUS", ifelse(ORDINAL==1, "ORDINAL", "ERROR"))))
+)
+```
+
+## Test individual significance of each var: only using ANOVA
+```{r, message=F, warning=F}
+#Function to test significance of each var
+signif <- function(x) {
+
+VAR <- x[1]
+CONTINUOUS <- x[4]
+
+#Omit rows with missing data points for var tested
+insurance_comp <- insurance[!is.na(eval(parse(text = paste("insurance$", VAR, sep="")))),]
+  
+nullmod <- glm(INS ~ 1, data = insurance_comp, family = binomial(link = "logit"))
+
+
+#If not a continuous variable, need to call factor() function
+if (CONTINUOUS == 0) {
+  logit.model <-  glm(as.formula(paste("INS ~ factor(", VAR,")", sep="")), data = insurance_comp, family = binomial(link = "logit"))
+} else {
+  logit.model <-  glm(as.formula(paste("INS ~", VAR, sep="")), data = insurance_comp, family = binomial(link = "logit"))
+}
+
+#Do ANOVA
+return(anova(logit.model, nullmod, test = 'LRT')[2,5])
+
+#Alternatively, can do chisq.test(table(insurance_comp$INS, insurance_comp$VAR))
+
+}
+
+vars$SIGNIFICANCE <- apply(vars, 1, signif)
+
+#Only vars with significance greater than 0.002
+sigvars <- vars %>%
+  filter(SIGNIFICANCE < .002) %>%
+  arrange(SIGNIFICANCE) %>%
+  select(VAR, TYPE, SIGNIFICANCE)
+
+#write_csv(sigvars, paste(file.dir,"sigvars.csv",sep = ""))
+
+#All vars ranked by significance
+allvars <- vars %>%
+  arrange(SIGNIFICANCE) %>%
+  select(VAR, TYPE, SIGNIFICANCE)
+
+write_csv(allvars, paste(file.dir,"allvars.csv",sep = ""))
+allvars
+```
+
+
+## Test individual significance of each var: using ANOVA, Pearsons and MH Chi-Square Tests
+```{r, message=F, warning=F}
+#Function to test significance of each var
+signif2 <- function(x) {
+
+VAR <- x[1]
+BINARY <- x[2]
+NOMINAL <- x[3]
+CONTINUOUS <- x[4]
+ORDINAL <- x[5]
+
+#Omit rows with missing data points for var tested
+insurance_comp <- insurance[!is.na(eval(parse(text = paste("insurance$", VAR, sep="")))),]
+
+
+#If not a continuous variable, need to call factor() function
+if (CONTINUOUS == 1) {
+  nullmod <- glm(INS ~ 1, data = insurance_comp, family = binomial(link = "logit"))
+  logit.model <-  glm(as.formula(paste("INS ~", VAR, sep="")), data = insurance_comp, family = binomial(link = "logit"))
+  return(anova(logit.model, nullmod, test = 'LRT')[2,5])
+  
+} else if(NOMINAL == 1) {
+  return(chisq.test(table(insurance_comp$INS, eval(parse(text = paste("factor(insurance_comp$", VAR,")", sep="")))))$p.val)
+} else {
+  return(as.numeric(MHChisqTest(table(insurance_comp$INS, eval(parse(text = paste("factor(insurance_comp$", VAR,")", sep="")))))$p.val))
+}
+
+
+}
+
+#Testing
+#VAR <- "CD"
+#insurance_comp <- insurance[!is.na(eval(parse(text = paste("insurance$", VAR, sep="")))),]
+#chisq.test(table(insurance_comp$INS, eval(parse(text = paste("factor(insurance_comp$", VAR,")", sep="")))))$p.val #nominal
+#as.numeric(MHChisqTest(table(insurance_comp$INS, eval(parse(text = paste("factor(insurance_comp$", VAR,")", sep="")))))$p.val) #ordinal
+
+#nullmod <- glm(INS ~ 1, data = insurance_comp, family = binomial(link = "logit"))
+  #logit.model <-  glm(as.formula(paste("INS ~", VAR, sep="")), data = insurance_comp, family = binomial(link = "logit"))
+ # anova(logit.model, nullmod, test = 'LRT')
+
+#Apply the function
+vars$SIGNIFICANCE2 <- apply(vars, 1, signif2)
+
+#Only vars with significance greater than 0.002
+sigvars2 <- vars %>%
+  filter(SIGNIFICANCE2 < .002) %>%
+  arrange(SIGNIFICANCE2) %>%
+  select(VAR, TYPE, SIGNIFICANCE2)
+
+write_csv(sigvars2, paste(file.dir,"sigvars2.csv",sep = ""))
+
+#All vars ranked by significance
+allvars2 <- vars %>%
+  arrange(SIGNIFICANCE2) %>%
+  select(VAR, TYPE, SIGNIFICANCE2)
+
+write_csv(allvars2, paste(file.dir,"allvars.csv",sep = ""))
+allvars2
+```
+
+
+## Calculate individual odds ratios of binary vars
+```{r, message=F, warning=F}
+#Function to calculate odds ratios of each binary var
+odds_ratio <- function(x) {
+
+VAR <- x[1]
+
+#Omit rows with missing data points for var tested
+insurance_comp <- insurance[!is.na(eval(parse(text = paste("insurance$", VAR, sep="")))),]
+
+#Fit model with binary variable
+logit.model <-  glm(as.formula(paste("INS ~ factor(", VAR,")", sep="")), data = insurance_comp, family = binomial(link = "logit"))
+
+
+#Calculate odds ratio
+exp(
+  cbind(coef(logit.model)[2], confint(logit.model))
+)[2,]
+
+
+}
+
+binary_vars <- vars[vars$TYPE=="BINARY",]
+binary_vars$ODDS <- numeric(nrow(binary_vars))
+binary_vars$ODDS_LB <- numeric(nrow(binary_vars))
+binary_vars$ODDS_UB <- numeric(nrow(binary_vars))
+
+for(i in 1:nrow(binary_vars)) {
+  binary_vars$ODDS[i] <- apply(binary_vars[i,], 1, odds_ratio)[1]
+  binary_vars$ODDS_LB[i] <- apply(binary_vars[i,], 1, odds_ratio)[2]
+  binary_vars$ODDS_UB[i] <- apply(binary_vars[i,], 1, odds_ratio)[3]
+  
+}
+
+binary_vars <- binary_vars %>%
+  arrange(desc(ODDS)) %>%
+  select(VAR, TYPE, ODDS, ODDS_LB, ODDS_UB)
+
+write_csv(binary_vars, paste(file.dir,"binary_vars.csv",sep = ""))
+binary_vars
+```
+
+Interpretation of highest magnitude odds ratio:
+
+INV (Indicator for investment account)
+- Customers with an investment account have 3.4720391 times the odds of purchasing the new insurance product than those without an investment account.
+
+Interesting findings:
+- Those with checking accounts are about 62.5% less likely to purchase the insurance product.
+- Those who interacted with ATM are 40.7% less likely to purchase the product.
+- Credit card owners are 78% more likely.
+- Home ownership is not significant (doesn't have an effect)
+- Those with local address are 42.5% less likely.
+
+## Linearity assumptions for continuous vars
+```{r, message=F, warning=F}
+#Function to test linearity assumption for continuous vars
+gam_pval <- function(x) {
+
+VAR <- x[1]
+
+#Omit rows with missing data points for var tested
+insurance_comp <- insurance[!is.na(eval(parse(text = paste("insurance$", VAR, sep="")))),]
+
+#Fit model with cont variable
+fit.gam <-  gam(as.formula(paste("INS ~ s(", VAR,")", sep="")), data = insurance_comp, family = binomial(link = "logit"), method = 'REML')
+
+#Calculate pvalue
+summary(fit.gam)$s.pv
+
+
+
+}
+
+#Filter variables into only continuous
+cont_vars <- vars[vars$TYPE=="CONTINUOUS",]
+
+#Add p-value to data
+cont_vars$LIN_ASSUMP_PVAL <- apply(cont_vars, 1, gam_pval)
+
+#Check if assumption is met and add it as variable
+cont_vars <- cont_vars %>%
+  select(VAR, TYPE, LIN_ASSUMP_PVAL) %>%
+  arrange(desc(LIN_ASSUMP_PVAL)) %>%
+  mutate(ASSUMPTION_MET = ifelse(LIN_ASSUMP_PVAL > .002, "YES", "NO"))
+
+write_csv(cont_vars, paste(file.dir,"cont_vars.csv",sep = ""))
+cont_vars
+
+```
+
+
+## Linearity assumptions for continuous vars
+```{r, message=F, warning=F}
+#Function to calc missing totals
+missing_tot <- function(x) {
+
+VAR <- x[1]
+
+#Omit rows with missing data points for var tested
+insurance_missing <- insurance[is.na(eval(parse(text = paste("insurance$", VAR, sep="")))),]
+
+#Calculate number missing
+nrow(insurance_missing)
+
+}
+
+vars$MISSING <- apply(vars, 1, missing_tot)
+
+#All vars ranked by missing
+vars_missing <- vars %>%
+  arrange(desc(MISSING)) %>%
+  select(VAR, TYPE, MISSING)
+
+write_csv(vars_missing, paste(file.dir,"vars_missing.csv",sep = ""))
+
+# Visual of missing values by each variable
+ggplot(data=vars_missing[vars_missing$MISSING!=0,], aes(x=VAR, y=MISSING)) +
+  geom_bar(stat="sum", aes(fill=VAR))  + coord_flip() + theme_minimal()+ theme(legend.position = "none") +
+  labs(title="Missing Values in Data", x="Number Missing", y="Variable")
+
+#Collinearity detection
+fullmod <- glm(INS ~., data = insurance, family = binomial(link = "logit"))
+
+vifs <- data.frame(vif(fullmod)[,1])%>%
+  rename(VIF=vif.fullmod....1.)
+vifs$VAR <- row.names(vifs)
+vifs <- vifs %>% select(VAR, VIF) %>% filter(VIF > 5)
+
+insur_sm <- insurance %>%
+  select(ILS, ILSBAL, MM, MMBAL, MTG, MTGBAL, CC, CCBAL)
+
+insur_sm %>%
+  filter(ILS==0 & ILSBAL == 0) %>%
+  nrow()
+
+```
+
+For people with installment loan (ISL), their ILSBAL is nonzero. Same with MM and MMBAL.
+
+
+
+
