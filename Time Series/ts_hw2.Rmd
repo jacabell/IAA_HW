@@ -1,0 +1,189 @@
+---
+title: "Time Series HW 2"
+author: "Jackson Cabell"
+date: "9/4/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(forecast)
+library(haven)
+library(fma)
+library(expsmooth)
+library(lmtest)
+library(zoo)
+library(seasonal)
+library(lubridate)
+library(magrittr)
+library(tidyverse)
+library(ggplot2)
+tsdf <- read.csv("PM_2_5_Raleigh2.csv")
+```
+
+
+```{r, eval=T, echo=F}
+#Roll-up the data to monthly data
+tsdf_ag <- tsdf %>%
+  mutate(month = month(as.Date(Date,format="%m/%d/%Y")),
+         day = day(as.Date(Date,format="%m/%d/%Y")),
+         year = year(as.Date(Date,format="%m/%d/%Y"))) %>%
+  group_by(year, month) %>%
+  summarize(
+            Daily.Mean.PM2.5.Concentration = mean(Daily.Mean.PM2.5.Concentration))
+tsdf_ag$Date <- as.yearmon(with(tsdf_ag, paste(year, month,sep="-")), "%Y-%m")
+
+#Create test, validation, and training (test is last 6 months, training is 6 months before that)
+test <- tsdf_ag[(nrow(tsdf_ag)-5):nrow(tsdf_ag),]
+valid <- tsdf_ag[(nrow(tsdf_ag)-11):(nrow(tsdf_ag)-6),]
+train <- tsdf_ag[1:(nrow(tsdf_ag)-12),]
+
+
+```
+
+## Decomposition
+```{r, eval=T, message=F, warning=F, echo=F}
+# Creation of Time Series Data Object on Train Data #
+train_ts <- ts(train$Daily.Mean.PM2.5.Concentration, start = c(2014, 1), end=c(2017, 12), frequency =12)
+
+
+#Create decomposition object -> classical
+decomp_stl <- stl(train_ts, s.window = 7) 
+
+#Actual overlaid with trend/cycle
+ggplot(train, aes(x=Date)) +
+  geom_line(aes(y=Daily.Mean.PM2.5.Concentration, color = "Actual PM2.5"), linetype="dotdash") +
+  geom_line(aes(y=decomp_stl$time.series[,2], color = "Trend/Cycle")) + theme_classic() + labs(y = "Avg Monthly PM2.5", x = "Date", color = "Data", title = "Trend/Cycle")
+
+
+#Actual overlaid with seasonally adjusted 
+ggplot(train, aes(x=Date)) +
+  geom_line(aes(y=Daily.Mean.PM2.5.Concentration, color = "Actual PM2.5"), linetype="dotdash") +
+  geom_line(aes(y=decomp_stl$time.series[,2]+decomp_stl$time.series[,3], color = "SA PM2.5")) + theme_classic() + labs(y = "Avg Monthly PM2.5", x = "Date", color = "Data", title = "Seasonally Adjusted")
+
+#Why used classical or STL?
+#STL b/c upon examination of the decomposition with STL, can see that there may be a seasonal component. Cannot check if there is a seasonal component by using classical decomposition, it automatically creates a perfect seasonal component.
+
+# Time Plot of predicted versus actual for test data
+
+```
+
+# Modeling and Accuracy
+```{r, eval=T, warning=F, message=F, echo=F}
+percipts <- ts(tsdf_ag$Daily.Mean.PM2.5.Concentration, start = c(2014, 1), end=c(2018, 12), frequency =12)
+train_ts <- subset(percipts,end=length(percipts)-12)
+valid_ts <- subset(percipts, start = length(percipts)-11 , end = length(percipts)-6)
+test_ts <- subset(percipts,start=length(percipts)-5)
+
+# Building a Single Exponential Smoothing Model#
+SES.train <- ses(train_ts, initial = "optimal", h = 6) 
+
+# Building a Linear Exponential Smoothing Model #
+LES.train <- holt(train_ts, initial = "optimal", h = 6, damped = FALSE)
+
+#Damped Trend ESM
+LDES.train <- holt(train_ts, initial = "optimal", h = 6, damped = TRUE)
+
+# Building an ADDITIVE Holt-Winters ESM#
+HWESAD.train <- hw(train_ts, seasonal = "additive")
+
+# Building a MULTIPLICATIVE Holt-Winters ESM#
+HWESML.train <- hw(train_ts, seasonal = "multiplicative")
+
+# Create list of models to loop through #
+models <- list(models = c(
+  "SES.train", "LES.train", "LDES.train", "HWESAD.train", "HWESML.train"
+), type = c(
+  "Single", "Linear", "Damped Linear", "Additive H-W", "Multiplicative H-W"
+))
+
+
+iter <- 1
+for (mod in models$models) {
+  modtype <- models$type[iter]
+  
+   #calculate MAPE
+  forecasts <- forecast(eval(parse(text = mod)),h=6)
+  error<-valid_ts-forecasts$mean
+  MAE<-round(mean(abs(error)), 4)
+  MAPE<-round(mean(abs(error)/abs(valid_ts)), 4)
+  RMSE <- round(sqrt(mean(error^2)), 4)
+  
+  #forecast data clean dataset#
+  forecast_data <- data.frame(Date=factor(c(valid$Date, c(valid$Date))), Type = factor(c(rep("Actual", 6),rep("Predicted", 6))), PM2.5=c(valid$Daily.Mean.PM2.5.Concentration, forecasts$mean))
+  
+  #plot predicted vs actual for test#
+  plot <- ggplot(forecast_data, aes(x=Date, group = Type)) +
+  geom_line(aes(y=PM2.5, color = Type, linetype=Type)) + theme_classic() + labs(y = "Avg Monthly PM2.5", x = "Date", title = "Time Plot of Predicted vs. Actual for Test Data", subtitle = paste("MAPE = ", MAPE,  ", MAE = ", MAE, "RMSE = ", RMSE, " for ", modtype, " model.",  sep=""))
+  
+ 
+  
+  print(plot)
+  iter <- iter+1
+}
+
+
+
+
+```
+
+
+# Accuracy measure to report for chosen model
+
+```{r, echo=F}
+percipts <- ts(tsdf_ag$Daily.Mean.PM2.5.Concentration, start = c(2014, 1), end=c(2018, 12), frequency =12)
+train_ts <- subset(percipts,end=length(percipts)-6)
+test_ts <- subset(percipts,start=length(percipts)-5)
+
+# Building the Final Smoothing Model#
+SES.train <- ses(train_ts, initial = "optimal", h = 6) 
+
+# Building a Linear Exponential Smoothing Model #
+LES.train <- holt(train_ts, initial = "optimal", h = 6, damped = FALSE)
+
+#Damped Trend ESM
+LDES.train <- holt(train_ts, initial = "optimal", h = 6, damped = TRUE)
+
+# Building an ADDITIVE Holt-Winters ESM#
+HWESAD.train <- hw(train_ts, seasonal = "additive")
+
+# Building a MULTIPLICATIVE Holt-Winters ESM#
+HWESML.train <- hw(train_ts, seasonal = "multiplicative")
+
+# Create list of models to loop through #
+models <- list(models = c(
+  "SES.train", "LES.train", "LDES.train", "HWESAD.train", "HWESML.train"
+), type = c(
+  "Single", "Linear", "Damped Linear", "Additive H-W", "Multiplicative H-W"
+))
+
+
+iter <- 1
+for (mod in models$models) {
+  modtype <- models$type[iter]
+  
+   #calculate MAPE
+  forecasts <- forecast(eval(parse(text = mod)),h=6)
+  error<-test_ts-forecasts$mean
+  MAE<-round(mean(abs(error)), 4)
+  MAPE<-round(mean(abs(error)/abs(test_ts)), 4)
+  RMSE <- round(sqrt(mean(error^2)), 4)
+  
+  #forecast data clean dataset#
+  forecast_data <- data.frame(Date=factor(c(test$Date, c(test$Date))), Type = factor(c(rep("Actual", 6),rep("Predicted", 6))), PM2.5=c(test$Daily.Mean.PM2.5.Concentration, forecasts$mean))
+  
+  #plot predicted vs actual for test#
+  plot <- ggplot(forecast_data, aes(x=Date, group = Type)) +
+  geom_line(aes(y=PM2.5, color = Type, linetype=Type)) + theme_classic() + labs(y = "Avg Monthly PM2.5", x = "Date", title = "Time Plot of Predicted vs. Actual for Test Data", subtitle = paste("MAPE = ", MAPE,  " and MAE = ", MAE, " RMSE = ", RMSE, " for ", modtype, " model.",  sep=""))
+  
+ 
+  
+  print(plot)
+  iter <- iter+1
+}
+
+```
+
+
+
+

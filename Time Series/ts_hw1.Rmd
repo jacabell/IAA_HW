@@ -1,0 +1,53 @@
+---
+title: "Time Series HW 1"
+output: html_notebook
+---
+
+
+
+```{r, echo=F}
+library(forecast)
+library(haven)
+library(fma)
+library(expsmooth)
+library(lmtest)
+library(zoo)
+library(seasonal)
+library(lubridate)
+library(magrittr)
+library(tidyverse)
+tsdf <- read.csv("PM_2_5_Raleigh2.csv")
+```
+
+
+```{r}
+#Question 1
+tsdf$Daily.Mean.PM2.5.Concentration[4]
+
+#Question 2 - account for the last day of the year and leap year by adding 2
+as.numeric(
+  as.Date(tsdf$Date[nrow(tsdf)],format="%m/%d/%Y") - as.Date(tsdf$Date[2],format="%m/%d/%Y")
+  ) + 2 - nrow(tsdf)
+
+#Question 3
+tsdf_ag <- tsdf %>%
+  mutate(month = month(as.Date(Date,format="%m/%d/%Y")),
+         day = day(as.Date(Date,format="%m/%d/%Y")),
+         year = year(as.Date(Date,format="%m/%d/%Y"))) %>%
+  group_by(year, month) %>%
+  summarize(
+            Monthly.Daily.Mean.PM2.5.Concentration = mean(Daily.Mean.PM2.5.Concentration))
+
+tsdf_ag$Date <- as.yearmon(with(tsdf_ag, paste(year, month,sep="-")), "%Y-%m")
+
+#Question 4
+#Aggregate using the sum
+
+#Question 5
+tsdf_ag$Monthly.Daily.Mean.PM2.5.Concentration[tsdf_ag$Date=="March 2015"]
+
+#Question 6
+percip <- ts(tsdf_ag$Monthly.Daily.Mean.PM2.5.Concentration, start = 2014, frequency =12)
+decomp_stl <- stl(percip, s.window = 7) #s.window gives window size for creating rolling average -> should always be odd
+plot(decomp_stl)
+```

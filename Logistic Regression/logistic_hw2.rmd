@@ -1,0 +1,219 @@
+---
+title: "Logistic HW 2"
+author: "Jackson Cabell"
+date: "9/8/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(MASS)
+library(visreg)
+library(brglm)
+library(car)
+library(mgcv)
+library(haven)
+library(tidyverse)
+library(ggplot2)
+library(DescTools)
+library(rJava)
+library(glmulti)
+library(givitiR)
+
+#Replace "..." for file.dir statement with user path
+setwd("C:/Users/Jackson Cabell/Documents/Homework/Logistic/HW2")
+ins_t <- read_sas("insurance_t_bin.sas7bdat")
+
+#Calculate number of variables with missing values
+sum(apply(data.frame(apply(ins_t, 2, is.na)),2,sum) !=0) 
+
+#Create list of predictor vars (remove INS)
+vars <- names(ins_t)
+vars <- vars[vars!="INS"]
+```
+
+## Fill missing values & check for separation concerns
+```{r, eval=T}
+#Check if target INS has missing values (No it doesn't)#
+sum(is.na(ins_t$INS))
+
+#Function to replace NA values with "M" string #
+fillNA <- function(x) {
+  #If column is na, return "M", else return it's original value
+  ifelse(is.na(x), "M", x)
+}
+
+#Apply the function column by column
+ins_t_m <- data.frame(apply(ins_t, 2, fillNA))
+
+#Create dataframe of vars#
+vardf <- data.frame(var=vars)
+
+#Create loop to print table of frequency to check complete or quasi-separation#
+i <- 1
+concern <- c()
+for (varble in vardf$vars) {
+  #Create frequency table and check if either columns has a zero (INS is columns, predictor is row)#
+  if (
+  sum(c(table(eval(parse(text=paste("ins_t_m$",varble, sep=""))),ins_t_m$INS)[,1]==0,
+        table(eval(parse(text=paste("ins_t_m$",varble, sep=""))),ins_t_m$INS)[,2]==0))!=0
+  ) {
+    #If there is a cell with 0, there is some concern, add the variable to list and print freq table#
+    concern[i] <- varble
+    i <- i+1
+    print(paste(varble, " is of concern with freq table:", sep=""))
+    print(table(eval(parse(text=paste("ins_t_m$",varble, sep=""))),ins_t_m$INS))
+  } else {
+    print(paste("No problems with ", varble, sep=""))
+  }
+
+}
+
+print(concern)
+
+
+#Print freq tables for CASHBK and MMCRED#
+print("CASHBK Original")
+table(ins_t_m$CASHBK, ins_t_m$INS)
+print("MMCRED Original")
+table(ins_t_m$MMCRED, ins_t_m$INS)
+
+#Adjust CASHBK: combine 1,2 to 1+#
+ins_t_m$CASHBK.c <- as.character(ins_t_m$CASHBK)
+ins_t_m$CASHBK.c[which(as.numeric(as.character(ins_t_m$CASHBK)) >= 1)] <- "1+"
+
+
+#Adjust MMCRED: combine 2,3,4,5 to 2+#
+ins_t_m$MMCRED.c <- as.character(ins_t_m$MMCRED)
+ins_t_m$MMCRED.c[which(as.numeric(as.character(ins_t_m$MMCRED)) >= 2)] <- "2+"
+
+#Look at freq breakdown to confirm#
+print("CASHBK Combined")
+table(ins_t_m$CASHBK.c, ins_t_m$INS)
+print("MMCRED Combined")
+table(ins_t_m$MMCRED.c, ins_t_m$INS)
+
+#Remember to use CASHBK.c and MMCRED.c vars in modeling instead of originals#
+ins_t_mod <- ins_t_m %>%
+  select(-MMCRED, -CASHBK)
+
+
+```
+`
+#Backward Selection
+```{r}
+#Make each variable a factor variable
+ins_t_mod <- data.frame(apply(ins_t_mod, 2, factor))
+
+#Fit full model of main effects
+mod_main <- glm(INS~., data = ins_t_mod, family = binomial(link = "logit"))
+
+#Run backward selection with BIC
+back.model <- step(mod_main, direction = "backward", k = log(nrow(ins_t_mod)), trace = FALSE) #BIC 
+summary(back.model)
+
+coef(back.model)
+#summary(back.model)
+#DDA, NSF, IRA, INV, ILS, MM, MTG, CC, DDABAL_Bin, CHECKS_Bin, TELLER_Bin, SAVBAL_Bin, ATMAMT_Bin, CDBAL_Bin are sig main effects
+
+
+#Calculate Type 3 significance for each variable
+vars <- c("DDA", "NSF", "IRA", "INV", "ILS", "MM", "MTG", "CC", "DDABAL_Bin", "CHECKS_Bin", "TELLER_Bin", "SAVBAL_Bin", "ATMAMT_Bin", "CDBAL_Bin")
+mainvardf <- data.frame(VAR=vars)
+
+pvals <- c()
+fullmod <- glm(INS~DDA+NSF+IRA+INV+ILS+MM+MTG+CC+DDABAL_Bin+CHECKS_Bin+TELLER_Bin+SAVBAL_Bin+ATMAMT_Bin+CDBAL_Bin, data = ins_t_mod, family = binomial(link = "logit"))
+for (vari in mainvardf$VAR) {
+  pvals <- c(pvals,anova(fullmod, glm(as.formula(paste("INS ~ DDA+NSF+IRA+INV+ILS+MM+MTG+CC+DDABAL_Bin+CHECKS_Bin+TELLER_Bin+SAVBAL_Bin+ATMAMT_Bin+CDBAL_Bin-", vari, sep="")), data = ins_t_mod, family = binomial(link = "logit")), test = "LRT")[2,5])
+}
+
+mainvardf$SIGNIFICANCE <- pvals
+
+mainvardf <- mainvardf %>%
+  arrange(SIGNIFICANCE)
+
+write.csv(mainvardf, "maineffects.csv")
+
+#Calculate odds ratios for main effects
+odd_ratios <- exp(
+          cbind(coef(back.model), confint(back.model, level=1-0.002630927))
+        )
+
+write.csv(odd_ratios, "maineffectratios.csv")
+
+```
+
+```{r}
+#Fit model with all possible two-way interactions with significant main effects from backward selection
+
+
+#Run stepwise regression based on BIC for model with two-way interactions
+for.model <- step(fullmod, 
+                  scope = list(lower=formula(fullmod), upper=INS~(DDA+NSF+IRA+INV+ILS+MM+MTG+CC+DDABAL_Bin+CHECKS_Bin+TELLER_Bin+SAVBAL_Bin+ATMAMT_Bin+CDBAL_Bin)^2), 
+                  direction = "forward", k = log(nrow(ins_t_mod)), trace = T)
+summary(for.model)
+
+#Model chosen from the stepwise.
+final.model <- glm(INS ~ DDA + NSF + IRA + INV + ILS + MM + MTG + 
+    CC + DDABAL_Bin + CHECKS_Bin + TELLER_Bin + SAVBAL_Bin + 
+    ATMAMT_Bin + CDBAL_Bin + DDA:IRA, family = binomial(link = "logit"), 
+    data = ins_t_mod)
+
+#Calculate Type 3 significance for each variable
+finvars <- c("DDA", "NSF", "IRA", "INV", "ILS", "MM", "MTG", "CC", "DDABAL_Bin", "CHECKS_Bin", "TELLER_Bin", "SAVBAL_Bin", "ATMAMT_Bin", "CDBAL_Bin", "DDA:IRA")
+finmainvardf <- data.frame(VAR=finvars)
+pvals <- c()
+for (vari in finmainvardf$VAR) {
+  if (vari %in% c("DDA", "IRA")) {
+    pvals <- c(pvals,anova(final.model, glm(as.formula(paste("INS ~ DDA+NSF+IRA+INV+ILS+MM+MTG+CC+DDABAL_Bin+CHECKS_Bin+TELLER_Bin+SAVBAL_Bin+ATMAMT_Bin+CDBAL_Bin-", vari, sep="")), data = ins_t_mod, family = binomial(link = "logit")), test = "LRT")[2,5])
+  } else {
+  pvals <- c(pvals,anova(final.model, glm(as.formula(paste("INS ~ DDA+NSF+IRA+INV+ILS+MM+MTG+CC+DDABAL_Bin+CHECKS_Bin+TELLER_Bin+SAVBAL_Bin+ATMAMT_Bin+CDBAL_Bin+DDA:IRA-", vari, sep="")), data = ins_t_mod, family = binomial(link = "logit")), test = "LRT")[2,5])
+  }
+  
+}
+
+finmainvardf$SIGNIFICANCE <- pvals
+
+finmainvardf <- finmainvardf %>%
+  arrange(SIGNIFICANCE)
+
+write.csv(finmainvardf, "fin_int.csv")
+
+#Calculate odds ratios
+odd_ratios_fin <- exp(
+          cbind(coef(final.model), confint(final.model, level=1-0.002630927))
+        )
+
+odds_ratios <-  exp(coef(final.model))
+
+write.csv(odd_ratios_fin, "fin_int_ratios.csv")
+
+```
+
+
+# Model exploration
+```{r, eval=F, echo=F}
+
+# Calculate calibration curve
+cali.curve <- givitiCalibrationBelt(o = as.numeric(ins_t_mod$INS)-1, 
+                                    e = predict(final.model, type = "response"), 
+                                    devel = "internal",
+                                    maxDeg = 3)
+plot(cali.curve, main = "Calibration Curve",
+                 xlab = "Predicted Probability",
+                 ylab = "Observed INS")
+
+ins_t_mod$pred <- predict(final.model, type = "response")
+
+#Calculate coefficient of determination
+summary <- ins_t_mod %>% group_by(INS) %>% summarize(avgpred = mean(pred))
+coef_of_determ <- summary$avgpred[2] - summary$avgpred[1]
+coef_of_determ
+```
+
+
+
+
+
+
+

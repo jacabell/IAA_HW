@@ -1,0 +1,44 @@
+---
+title: "Linear HW"
+author: "Jackson Cabell"
+date: "9/7/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(RColorBrewer)
+load("C:/Users/Jackson Cabell/Documents/Homework/Linear/LeukError.RData")
+leuk <- leuk %>% select(V5001, everything())
+dim(leuk)
+palette(brewer.pal(n = 8, name = "Dark2"))
+
+pcaOut <- prcomp(leuk[,2:5001],3, scale = F)
+```
+
+```{r, warning=F, message=F}
+#Cannot rescale a constant/zero column to unit variance. Solution: check for columns with zero variance and remove them
+leuk <- leuk[,c(1, which(apply(leuk, 2, sd)>0))]
+dim(leuk)
+
+```
+
+```{r, echo=F}
+pcaOut <- prcomp(leuk[,2:4813],3, scale = F) #covariance PCA
+
+plot(pcaOut$x[,1],pcaOut$x[,2],col = leuk[,1], xlab = "Principal Component 1", ylab = "Principal Component 2", main = 'Gene Expressions Projected onto 2-dimensions', cex = 2.2)
+text(pcaOut$x[,2]~pcaOut$x[,1], labels=row.names(leuk), cex=0.5, font=1, adj = c(0.5, 0.5))
+legend(60000, -30000, legend=unique(leuk[,1]),
+       fill=c("#1B9E77", "#7570B3", "#E6AB02"), cex=0.8,
+       box.lty=0)
+
+```
+
+
+
+The following samples look unusually labeled and should be tested first: samples 19, 2, 10, and 35
+
+
+
+

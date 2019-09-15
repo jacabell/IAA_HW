@@ -1,0 +1,101 @@
+---
+title: "TS HW 3"
+author: "Jackson Cabell"
+date: "9/15/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(forecast)
+library(haven)
+library(fma)
+library(expsmooth)
+library(lmtest)
+library(zoo)
+library(seasonal)
+library(lubridate)
+library(magrittr)
+library(tidyverse)
+library(ggplot2)
+tsdf <- read.csv("PM_2_5_Raleigh2.csv")
+
+#Roll-up the data to monthly data
+tsdf_ag <- tsdf %>%
+  mutate(month = month(as.Date(Date,format="%m/%d/%Y")),
+         day = day(as.Date(Date,format="%m/%d/%Y")),
+         year = year(as.Date(Date,format="%m/%d/%Y"))) %>%
+  group_by(year, month) %>%
+  summarize(
+           Daily.Mean.PM2.5.Concentration = mean(Daily.Mean.PM2.5.Concentration))
+tsdf_ag$Date <- as.yearmon(with(tsdf_ag, paste(year, month,sep="-")), "%Y-%m")
+#write.csv(tsdf_ag,"ts_ag.csv")
+
+#test <- tsdf_ag[(nrow(tsdf_ag)-5):nrow(tsdf_ag),]
+tsdf_ag <- tsdf_ag[1:(nrow(tsdf_ag)-6),]
+
+
+ts_calc <- read.csv("ts_cacl.csv")
+ts_calc <- ts_calc[1:(nrow(ts_calc)-6),]
+
+tsdf_ag$t <-ts_calc$t
+tsdf_ag$t_sq <-ts_calc$t_sq
+tsdf_ag$t_log <- ts_calc$t_log
+
+```
+
+## Plot trend and residuals from different models
+
+```{r, wawrning=F, message=F}
+#Plot trend
+# Creation of Time Series Data Object on Train Data #
+ts <- ts(tsdf_ag$Daily.Mean.PM2.5.Concentration, start = c(2014, 1), end=c(2018, 6), frequency =12)
+
+
+#Create decomposition object -> classical
+decomp_stl <- stl(ts, s.window = 7) 
+
+#Actual overlaid with trend/cycle
+ggplot(tsdf_ag, aes(x=Date)) +
+  geom_line(aes(y=Daily.Mean.PM2.5.Concentration, color = "Actual PM2.5"), linetype="dotdash") +
+  geom_line(aes(y=decomp_stl$time.series[,2], color = "Trend/Cycle")) + theme_classic() + labs(y = "Avg Monthly PM2.5", x = "Date", color = "Data", title = "Actual PM2.5 Levels with Trend Overlayed")
+
+######### Looks like it could be a linear or a quadratic trend ##############
+
+
+#Fit logistic model and calculate residuals
+loglm <- lm(Daily.Mean.PM2.5.Concentration ~ t_log, data = tsdf_ag)
+tsdf_ag$logresid <- predict(loglm) - tsdf_ag$Daily.Mean.PM2.5.Concentration
+tsdf_ag$logpred <-  predict(loglm)
+
+#Plot residuals against time for log model
+ggplot(tsdf_ag, aes(x = logpred, y = logresid)) +
+  geom_point(color = "blue") + theme_classic() +
+  labs(title = "Residuals from log(time) Trend", y = "Residuals", x = "Predicted PM2.5") + 
+  geom_hline(yintercept = 0, linetype = "dashed")
+
+
+#Fit quadratic regression and calculate residuals
+quadlm <- lm(Daily.Mean.PM2.5.Concentration ~ t + t_sq, data = tsdf_ag)
+tsdf_ag$quadresid <- predict(quadlm) - tsdf_ag$Daily.Mean.PM2.5.Concentration
+tsdf_ag$quadpred <- predict(quadlm)
+
+#Plot residuals against time for quad model
+ggplot(tsdf_ag, aes(x = quadpred, y = quadresid)) +
+  geom_point(color = "blue") + theme_classic() +
+  labs(title = "Residuals from Quadtratic Trend", y = "Residuals", x = "Predicted PM2.5") + 
+  geom_hline(yintercept = 0, linetype = "dashed")
+
+#Fit linear regression and calculate residuals
+linlm <- lm(Daily.Mean.PM2.5.Concentration ~ t, data = tsdf_ag)
+tsdf_ag$linresid <- predict(linlm) - tsdf_ag$Daily.Mean.PM2.5.Concentration
+tsdf_ag$linpred <- predict(linlm)
+
+#Plot residuals against time for lin model
+ggplot(tsdf_ag, aes(x = linpred, y = linresid)) +
+  geom_line(color = "black") + geom_point(color = "red") + theme_classic() +
+  labs(title = "Residuals from Linear Trend", y = "Residuals", x = "Predicted PM2.5") + 
+  geom_hline(yintercept = 0, linetype = "dashed")
+```
+
+
