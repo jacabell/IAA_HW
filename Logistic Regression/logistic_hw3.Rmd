@@ -1,0 +1,242 @@
+---
+title: "Logistic HW 3"
+author: "Jackson Cabell"
+date: "9/15/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(MASS)
+library(visreg)
+library(brglm)
+library(car)
+library(mgcv)
+library(haven)
+library(tidyverse)
+library(ggplot2)
+library(DescTools)
+library(rJava)
+library(glmulti)
+library(givitiR)
+library(ROCR)
+library(InformationValue)
+
+#Replace "..." for file.dir statement with user path
+setwd("C:/Users/Jackson Cabell/Documents/Homework/Logistic/HW3")
+ins_v <- read_sas("insurance_v_bin.sas7bdat")
+
+################################# Data Cleaning for Validation Set #################################################
+
+#Function to replace NA values with "M" string #
+fillNA <- function(x) {
+  #If column is na, return "M", else return it's original value
+  ifelse(is.na(x), "M", x)
+}
+
+#Apply the function column by column
+ins_v <- data.frame(apply(ins_v, 2, fillNA))
+
+#Adjust CASHBK: combine 1,2 to 1+#
+ins_v$CASHBK.c <- as.character(ins_v$CASHBK)
+ins_v$CASHBK.c[which(as.numeric(as.character(ins_v$CASHBK)) >= 1)] <- "1+"
+
+
+#Adjust MMCRED: combine 2,3,4,5 to 2+#
+ins_v$MMCRED.c <- as.character(ins_v$MMCRED)
+ins_v$MMCRED.c[which(as.numeric(as.character(ins_v$MMCRED)) >= 2)] <- "2+"
+
+#Remember to use CASHBK.c and MMCRED.c vars in modeling instead of originals#
+ins_v <- ins_v %>%
+  dplyr::select(-MMCRED, -CASHBK)
+
+#Make each variable a factor variable
+ins_v <- data.frame(apply(ins_v, 2, factor))
+
+################################# Data Cleaning for Training Set #################################################
+ins_t <- read_sas("insurance_t_bin.sas7bdat")
+
+#Apply the function column by column
+ins_t <- data.frame(apply(ins_t, 2, fillNA))
+
+#Adjust CASHBK: combine 1,2 to 1+#
+ins_t$CASHBK.c <- as.character(ins_t$CASHBK)
+ins_t$CASHBK.c[which(as.numeric(as.character(ins_t$CASHBK)) >= 1)] <- "1+"
+
+
+#Adjust MMCRED: combine 2,3,4,5 to 2+#
+ins_t$MMCRED.c <- as.character(ins_t$MMCRED)
+ins_t$MMCRED.c[which(as.numeric(as.character(ins_t$MMCRED)) >= 2)] <- "2+"
+
+#Remember to use CASHBK.c and MMCRED.c vars in modeling instead of originals#
+ins_t <- ins_t %>%
+  dplyr::select(-MMCRED, -CASHBK)
+
+#Make each variable a factor variable
+ins_t <- data.frame(apply(ins_t, 2, factor))
+
+```
+
+## Fit Final Model Selected from HW 2 and Calculate PVals for Each Variable
+
+```{r}
+final_mod <- glm(INS ~ DDA + NSF + IRA + INV + ILS + MM + MTG + 
+    CC + DDABAL_Bin + CHECKS_Bin + TELLER_Bin + SAVBAL_Bin + 
+    ATMAMT_Bin + CDBAL_Bin + DDA:IRA, family = binomial(link = "logit"), 
+    data = ins_t)
+
+#Calculate Type 3 significance for each variable
+finvars <- c("DDA", "NSF", "IRA", "INV", "ILS", "MM", "MTG", "CC", "DDABAL_Bin", "CHECKS_Bin", "TELLER_Bin", "SAVBAL_Bin", "ATMAMT_Bin", "CDBAL_Bin", "DDA:IRA")
+finmainvardf <- data.frame(VAR=finvars)
+pvals <- c()
+for (vari in finmainvardf$VAR) {
+  if (vari %in% c("DDA", "IRA")) {
+    pvals <- c(pvals,anova(final_mod, glm(as.formula(paste("INS ~ DDA+NSF+IRA+INV+ILS+MM+MTG+CC+DDABAL_Bin+CHECKS_Bin+TELLER_Bin+SAVBAL_Bin+ATMAMT_Bin+CDBAL_Bin-", vari, sep="")), data = ins_t, family = binomial(link = "logit")), test = "LRT")[2,5])
+  } else {
+  pvals <- c(pvals,anova(final_mod, glm(as.formula(paste("INS ~ DDA+NSF+IRA+INV+ILS+MM+MTG+CC+DDABAL_Bin+CHECKS_Bin+TELLER_Bin+SAVBAL_Bin+ATMAMT_Bin+CDBAL_Bin+DDA:IRA-", vari, sep="")), data = ins_t, family = binomial(link = "logit")), test = "LRT")[2,5])
+  }
+  
+}
+
+#Write the singificance to a small, clean dataframe
+finmainvardf$SIGNIFICANCE <- pvals
+finmainvardf <- finmainvardf %>%
+  arrange(SIGNIFICANCE)
+
+#write.csv(finmainvardf, "pvals.csv")
+```
+
+## CalculateConcordance Percentage and Coefficient of Discrimination on Training Data
+
+```{r, message = F, warning = F}
+
+#Calculate Coefficient of Discrimination on training data and create a visual of discrimination slope through histograms
+# Discrimination Slope #
+ins_t$p_hat <- predict(final_mod, type = "response")
+
+p1 <- ins_t$p_hat[ins_t$INS == 1]
+p0 <- ins_t$p_hat[ins_t$INS == 0]
+coef_discrim <- mean(p1) - mean(p0)
+
+ggplot(ins_t, aes(p_hat, fill = factor(INS))) +
+  geom_density(alpha = 0.6) +
+  scale_fill_grey() +
+  labs(x = "Predicted Probability",
+       fill = "Outcome",
+       y = "Density",
+       title = "Predicted Probability Densities for INS = 0 and INS = 1") + theme_classic() + theme(plot.title = element_text(hjust = 0.5))
+
+#Calculate concordance percentage on training data
+# Rank-order Statistics #
+Concordance(ins_t$INS, ins_t$p_hat)
+```
+
+## Visual of  ROC curve. Calculate K-S Statistic for training data
+
+```{r, message = F, warning = F}
+#Plot the ROC curve for Training Data
+# ROC Curve - InformationValue Package #
+#plotROC(ins_t$INS, ins_t$p_hat)
+#AUROC(ins_t$INS, ins_t$p_hat)
+
+# ROC Curve - ROCR Package #
+pred <- prediction(fitted(final_mod), factor(ins_t$INS))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+plot(perf, lwd = 3, colorize = TRUE, colorkey = TRUE,
+     colorize.palette = rev(gray.colors(256)))
+abline(a = 0, b = 1, lty = 3)
+
+#Calculate K-S Statistic for Training Data
+# K-S Statistics #
+#ks_plot(ins_t$INS, ins_t$p_hat) + labs(title = "K-S Statistic: 0.4641", x = "Rank")
+#(ksstat <- ks_stat(ins_t$INS, ins_t$p_hat))
+
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+KS <- max(perf@y.values[[1]] - perf@x.values[[1]])
+cutoffAtKS <- unlist(perf@alpha.values)[which.max(perf@y.values[[1]] - perf@x.values[[1]])]
+print(c(KS, cutoffAtKS))
+
+
+```
+
+## Using validation data: display final confusion matrix, accuracy, and lift - add a visual to help show the model performance
+
+```{r, warning=F, message=F}
+#Print final confusion matrix on validation data
+# Classification Table#
+ins_v$p_hat <- predict(final_mod, newdata = ins_v, type = "response")
+confusionMatrix(ins_v$INS, ins_v$p_hat, threshold = cutoffAtKS) #Actual is on the top, predicted is on left
+
+#Calculate accuracy on validation data
+ins_v$INS_p <- as.numeric(ins_v$p_hat>cutoffAtKS)
+accuracy <- mean(ins_v$INS_p==ins_v$INS)
+
+
+#Lift - add a visual to help show the model performance on training data
+
+
+#Need to account for weight
+
+#Caclculate population proportions
+pi_1 <- sum(c(ins_t$INS==1, ins_v$INS==1))/sum(nrow(ins_t), nrow(ins_v))
+pi_0 <- sum(c(ins_t$INS==0, ins_v$INS==0))/sum(nrow(ins_t), nrow(ins_v))
+#Calculate sample proportions (training data)
+p_1 <- sum(ins_t$INS==1)/nrow(ins_t)
+p_0 <- sum(ins_t$INS==0)/nrow(ins_t)
+ins_t$weight <- ifelse(ins_t$INS == 1, pi_1/p_1, pi_0/p_0)
+
+#Calculate Lift
+lift <- precision(ins_v$INS, ins_v$p_hat, threshold = cutoffAtKS)/pi_1
+
+#Fit final model on training set with weights
+final_mod_weighted <- glm(INS ~ DDA + NSF + IRA + INV + ILS + MM + MTG + CC +
+    DDABAL_Bin + CHECKS_Bin + TELLER_Bin + SAVBAL_Bin + 
+    ATMAMT_Bin + CDBAL_Bin + DDA:IRA, family = binomial(link = "logit"), 
+    data = ins_t, weights = weight)
+
+#Prepare prediction object for Lift Chart
+ins_v$predw <- predict(final_mod_weighted, newdata = ins_v, type = "response")
+pred_w <- prediction(ins_v$predw, factor(ins_v$INS))
+
+#Remove outlier
+ins_v_cop <- ins_v
+ins_v <- filter(ins_v, predw < 0.99)
+
+#Prepare prediction object for Lift Chart
+ins_v$predw <- predict(final_mod_weighted, newdata = ins_v, type = "response")
+pred_w <- prediction(ins_v$predw, factor(ins_v$INS))
+
+# Lift Chart #
+perf <- performance(pred_w, measure = "lift", x.measure = "rpp")
+plot(perf, lwd = 3, colorize = TRUE, colorkey = TRUE,
+     colorize.palette = rev(gray.colors(256)),
+     main = "Lift Chart for Validation Data",
+     xlab = "Depth (Proportion of Customers Predicted to Purchase)",
+     ylab = "Lift")
+abline(h = 1, lty = 3)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
