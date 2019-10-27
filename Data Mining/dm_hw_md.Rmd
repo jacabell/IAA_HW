@@ -1,0 +1,72 @@
+---
+title: "Data Mining HW 2"
+author: "Jackson Cabell"
+date: "10/13/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# Load the data
+load("C:/Users/Jackson Cabell/Documents/Homework/Data Mining/HW2/bankData.Rdata")
+
+# Split into train and test
+perm=sample(1:nrow(bank))
+bank_randomOrder=bank[perm,]
+train = bank_randomOrder[1:floor(0.75*nrow(bank)),]
+test = bank_randomOrder[(floor(0.75*nrow(bank))+1):nrow(bank),]
+
+# Build a default decision tree model using entropy
+# as the metric for building the tree
+library("rpart")
+tree = rpart(next.product ~ . - next.product-duration-emp.var.rate-nr.employed, data=train, method='class',
+            parms = list(split='entropy'),
+            control = rpart.control(cp = 0.01, xval = 10, maxdepth=8))
+
+#tree = rpart(next.product ~ . - next.product-duration-emp.var.rate-nr.employed, data=train, method='class',
+            #parms = list(split='entropy'))
+
+# Examine the variable importance measures
+tree$variable.importance
+
+# Create a bar plot to look at relative differences
+# in variable importance
+library('lattice')
+barchart(tree$variable.importance[order(tree$variable.importance)],
+         xlab = 'Importance', horiz=T, xlim=c(0,2000),ylab='Variable',
+         main = 'Variable Importance',cex.names=0.8, las=2, col = 'orange')
+
+# Compute training misclassification rate
+tscores = predict(tree,type='class')
+scores = predict(tree, test, type='class')
+cat('Training Misclassification Rate:',
+    sum(tscores!=train$next.product)/nrow(train))
+
+# Compute test misclassification rate
+cat('Test Misclassification Rate:',
+    sum(scores!=test$next.product)/nrow(test))
+
+# Use rpart.plot library to make a more appealing plot
+library("rattle") # Fancy tree plot
+library("rpart.plot") # Enhanced tree plots
+library("RColorBrewer") # Color selection for fancy tree plot
+library("party") # Alternative decision tree algorithm
+library("partykit") # Convert rpart object to BinaryTree
+# fancyRpartPlot(tree) # Looks completely terrible but has
+# # potential for smaller trees, fewer classes
+#
+prp(tree)
+prp(tree, type =3, extra=100) # label branches, label nodes with % of obs
+prp(tree, type =3, extra=2) # label branches, label nodes with misclass rate
+prp(tree, type =3, extra=8) # label branches, label nodes with pred prob of class
+# # BEWARE WITH BINARY TREES WHERE WE TYPICALLY WANT TO SHOW PROB OF SUCCESS/FAILURE
+# # FOR EVERY NODE IN THE TREE!
+
+prp(tree, type =0, extra=8, leaf.round=1, border.col=1,
+    box.col=brewer.pal(10,"Set3")[tree$frame$yval], )
+```
+
