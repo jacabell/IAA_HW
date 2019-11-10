@@ -1,0 +1,227 @@
+---
+title: "HW2"
+author: "Jackson Cabell"
+date: "11/7/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(survival)
+library(survminer)
+library(flexsurv)
+library(tidyverse)
+library(ggplot2)
+library(haven)
+library(dplyr)
+hurricane <- read_sas("hurricane.sas7bdat")
+```
+
+## AFT Model Building
+
+```{r}
+# Goodness-of-Fit Tests #
+# The flexsurvreg() function has more distributions available than in SAS so we can perform more comparisons here. #
+like.e <- flexsurvreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope+elevation,
+                      data = hurricane, dist = "exp")$loglik
+like.w <- flexsurvreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope+elevation,
+                      data = hurricane, dist = "weibull")$loglik
+like.ln <- flexsurvreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope+elevation,
+                      data = hurricane, dist = "lnorm")$loglik
+like.g <- flexsurvreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope+elevation,
+                      data = hurricane, dist = "gamma")$loglik
+like.ll <- flexsurvreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope+elevation,
+                      data = hurricane, dist = "llogis")$loglik
+like.f <- flexsurvreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope+elevation,
+                      data = hurricane, dist = "genf")$loglik
+
+pval.e.g <- 1 - pchisq((-2*(like.e-like.g)), 2) #Gamma better than expo
+pval.w.g <- 1 - pchisq((-2*(like.w-like.g)), 1) #Weibull better than Gamma
+pval.ln.g <- 1 - pchisq((-2*(like.ln-like.g)), 1) #Gamma better than log-normal
+pval.g.f <- 1 - pchisq((-2*(like.g-like.f)), 1) #F better than gamma
+pval.ll.f <- 1 - pchisq((-2*(like.ll-like.f)), 1) # F better than log-logistic
+pval.w.f <- 1 - pchisq((-2*(like.w-like.f)), 2) # F better than Weibull
+
+Tests <- c('Exp vs. Gam', 'Wei vs. Gam', 'LogN vs. Gam', 'Gam vs. F', 'LogL vs. F', 'Wei vs. F')
+P_values <- c(pval.e.g, pval.w.g, pval.ln.g, pval.g.f, pval.ll.f, pval.w.f)
+pvals <- data.frame(cbind(Tests, P_values))
+#write.csv(pvals, "C:/Users/Jackson Cabell/Documents/Homework/Survival Analysis/HW2/dtr_pval.csv")
+
+# It seems that Weibull is the best here
+# F has best in terms of p-values, but cannot trust likelihood since convergence did not occur
+
+# Check F
+plot(flexsurvreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope+elevation,
+             data = hurricane, dist = "genf"),
+     type = "cumhaz", ci = TRUE, conf.int = FALSE, las = 1, bty = "n",
+     xlab = "Hour", ylab = "Cumulative Hazard", main = "F Distribution",
+     xlim = c(0,50))
+legend(0, .20, legend=c("Theoretical", "Actual"),
+       col=c("red", "black"), lty=c(1,1), cex=0.8)
+
+# Check Weibull
+plot(flexsurvreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope+elevation,
+             data = hurricane, dist = "weibull"),
+     type = "cumhaz", ci = TRUE, conf.int = FALSE, las = 1, bty = "n",
+     xlab = "Hour", ylab = "Cumulative Hazard", main = "Weibull Distribution",
+     xlim = c(0,50))
+legend(0, .20, legend=c("Theoretical", "Actual"),
+       col=c("red", "black"), lty=c(1,1), cex=0.8)
+
+# Check Gamma
+plot(flexsurvreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope+elevation,
+             data = hurricane, dist = "gamma"),
+     type = "cumhaz", ci = TRUE, conf.int = FALSE, las = 1, bty = "n",
+     xlab = "Hour", ylab = "Cumulative Hazard", main = "Gamma Distribution",
+     xlim = c(0,50))
+legend(0, .20, legend=c("Theoretical", "Actual"),
+       col=c("red", "black"), lty=c(1,1), cex=0.8)
+
+# Check Log-Normal
+plot(flexsurvreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope+elevation,
+             data = hurricane, dist = "lnorm"),
+     type = "cumhaz", ci = TRUE, conf.int = FALSE, las = 1, bty = "n",
+     xlab = "Hour", ylab = "Cumulative Hazard", main = "Log-Normal Distribution",
+     xlim = c(0,50))
+legend(0, .20, legend=c("Theoretical", "Actual"),
+       col=c("red", "black"), lty=c(1,1), cex=0.8)
+
+# Check Log-Logistic
+plot(flexsurvreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope+elevation,
+             data = hurricane, dist = "llogis"),
+     type = "cumhaz", ci = TRUE, conf.int = FALSE, las = 1, bty = "n",
+     xlab = "Hour", ylab = "Cumulative Hazard", main = "Log-Logistic Distribution",
+     xlim = c(0,50))
+legend(0, .20, legend=c("Theoretical", "Actual"),
+       col=c("red", "black"), lty=c(1,1), cex=0.8)
+
+# Weibull is the best - select this for modeling
+
+
+# Backward selection with p-value and significance level = 0.03
+
+cbind(summary(survreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope+elevation,
+             data = hurricane, dist = "weibull"))$table[,4]) #remove elevation
+cbind(summary(survreg(Surv(hour, reason == 1) ~ backup+age+bridgecrane+servo+gear+trashrack+slope,
+             data = hurricane, dist = "weibull"))$table[,4]) #remove age
+cbind(summary(survreg(Surv(hour, reason == 1) ~ backup+bridgecrane+servo+gear+trashrack+slope,
+             data = hurricane, dist = "weibull"))$table[,4]) #remove bridgecrane
+cbind(summary(survreg(Surv(hour, reason == 1) ~ backup+servo+gear+trashrack+slope,
+             data = hurricane, dist = "weibull"))$table[,4]) #remove gear
+cbind(summary(survreg(Surv(hour, reason == 1) ~ backup+servo+trashrack+slope,
+             data = hurricane, dist = "weibull"))$table[,4]) #remove trashrack
+cbind(summary(survreg(Surv(hour, reason == 1) ~ backup+servo+slope,
+             data = hurricane, dist = "weibull"))$table[,4])
+
+# Fit the final model
+aft.w <- survreg(Surv(hour, reason == 1) ~ backup+servo+slope,
+             data = hurricane, dist = "weibull")
+sigvars <- data.frame(pval = cbind(summary(survreg(Surv(hour, reason == 1) ~ backup+servo+slope,
+             data = hurricane, dist = "weibull"))$table[,4]))
+sigvars$variable <- row.names(sigvars)
+sigvars <- sigvars[c("backup","servo","slope"),]
+
+#Interpret the coefficient of most important variable (slope): For every unit increase in the surrounding ravine slope of the pump station, the expected pump survival time decreases by 5.8807%
+sigvars$coefficient <- coef(aft.w)[2:4]
+sigvars$effect <- (exp(coef(aft.w)[2:4])-1)*100
+#write.csv(sigvars, "C:/Users/Jackson Cabell/Documents/Homework/Survival Analysis/HW2/var_pval.csv")
+```
+
+
+## Upgrade analysis
+
+```{r}
+# Predicted Survival Probabilities #
+survprob.actual <- 1 - psurvreg(hurricane$hour,
+                                mean = predict(aft.w, type = "lp"),
+                                scale = aft.w$scale,
+                                distribution = aft.w$dist)
+
+################################### Predicted Change in Event Time #############################################
+
+#backup upgrade
+new_time_backup <-  qsurvreg(1 - survprob.actual,
+                      mean = predict(aft.w, type = "lp") + coef(aft.w)['backup'],
+                      scale = aft.w$scale,
+                      distribution = aft.w$dist)
+
+hurricane$new_time_backup <- new_time_backup
+hurricane$diff_backup <- hurricane$new_time_backup - hurricane$hour
+#select(hurricane, diff_backup, backup)
+
+#servo upgrade
+new_time_servo <-  qsurvreg(1 - survprob.actual,
+                      mean = predict(aft.w, type = "lp") + coef(aft.w)['servo'],
+                      scale = aft.w$scale,
+                      distribution = aft.w$dist)
+
+hurricane$new_time_servo  <- new_time_servo 
+hurricane$diff_servo <- hurricane$new_time_servo - hurricane$hour
+
+### Recommend putting pump on lower surrounding ravine slope ###
+
+# Create a column for pump # in original dataset (hurricane)
+hurricane$pump <- row.names(hurricane)
+
+# Create a dataframe only with pumps that either don't have a backup or servo or neither AND have a new time
+# greater than 48 hours due to one of the two upgrades.
+
+pumps_most_deserving <- hurricane %>%
+                          filter(backup == 0 | servo ==0,
+                                 hour < 48,
+                                 (new_time_servo >= 48 & servo == 0) |  (new_time_backup >= 48 & backup == 0)) %>%
+                          mutate(upgrade = ifelse(new_time_backup >= 48 & backup == 0, "backup", "servo"),
+                                 cost = ifelse(upgrade=="backup", .1, .15)) %>%
+                          select(pump, hour, new_time_servo, new_time_backup, upgrade, cost, everything()) %>%
+                          arrange(hour, cost)
+
+# Select the pumps to give backup upgrade (cheapest way to getting 25 pumps past 48 hours)
+pump_upgrade <- hurricane %>%
+                filter(backup == 0 | servo ==0,
+                       hour < 48,
+                       (new_time_servo >= 48 & servo == 0) |  (new_time_backup >= 48 & backup == 0)) %>%
+                mutate(upgrade = ifelse(new_time_backup >= 48 & backup == 0, "backup", "servo"),
+                       cost = ifelse(upgrade=="backup", .1, .15)) %>%
+                arrange(cost, hour) %>%
+                rename(time_benefit = diff_backup,
+                       hour_predicted = new_time_backup) %>%
+                select(pump, slope, servo, backup, hour, time_benefit,  hour_predicted, upgrade, cost) %>%
+                head(25)
+#write.csv(select(pump_upgrade,
+#                 pump, hour, time_benefit, hour_predicted, upgrade),
+ #         "C:/Users/Jackson Cabell/Documents/Homework/Survival Analysis/HW2/upgrade.csv", row.names=FALSE)
+
+# Of eligible pumps that can make it to 48 hours, give upgrade to pumps with earliest failure hour
+upgrade_lowest_hour <-    hurricane %>%
+                          filter(backup == 0 | servo ==0,
+                                 hour < 48,
+                                 (new_time_servo >= 48 & servo == 0) |  (new_time_backup >= 48 & backup == 0)) %>%
+                          mutate(upgrade = ifelse(new_time_backup >= 48 & backup == 0, "backup", "servo"),
+                                 cost = ifelse(upgrade=="backup", .1, .15)) %>%
+                          select(pump, hour, new_time_servo, new_time_backup, upgrade, cost, everything()) %>%
+                          arrange(hour, cost) %>%
+                          mutate(total_cost = cumsum(cost),
+                                 time_benefit = ifelse(upgrade=="backup",diff_backup, diff_servo),
+                                 hour_predicted = ifelse(upgrade=="backup", new_time_backup, new_time_servo)) %>%
+                          filter(total_cost <= 2.5)
+#write.csv(select(upgrade_lowest_hour,
+#                 pump, hour, time_benefit, hour_predicted, upgrade),
+#          "C:/Users/Jackson Cabell/Documents/Homework/Survival Analysis/HW2/upgrade_lowest_hour.csv", row.names=FALSE)
+                
+
+
+# effects <- hurricane %>%
+#                 filter(backup == 0 | servo ==0) %>%
+#                 # mutate(
+#                 #   diff_backup_dollar = diff_backup/100, #calculate hour gained per $1,000 
+#                 #   diff_servo_dollar = diff_servo/150, #calculate hour gained per $1,000 
+#                 #   max_diff = ifelse(diff_backup_dollar>=diff_servo_dollar, diff_backup_dollar, diff_servo_dollar),
+#                 #   upgrade = ifelse(diff_backup_dollar>=diff_servo_dollar, "backup", "servo")
+#                 # ) %>%
+#                   arrange(desc(max_diff)) %>%
+#                     select(hour, new_time_servo, new_time_backup,
+#                            backup, servo, everything())
+```
+
+
+

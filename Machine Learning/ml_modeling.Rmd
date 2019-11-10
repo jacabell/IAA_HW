@@ -1,0 +1,583 @@
+---
+title: "Machine Learning Modeling Competition"
+author: "Jackson Cabell"
+date: "11/2/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(xgboost)
+library('randomForest')
+seed <- 84553
+
+```
+
+## About the Data
+- Column Z2 is categorigal in nature, everything else is numeric
+- Target 1 and Target 2 are not mutually exclusive
+```{r, echo=F}
+#test <- read.csv("C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/Data/MLProject_test.csv")
+load("C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/Data/MLProjectData_missings_imputed.RData")
+#load("C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/Data/MLProjectData.RData")
+#Column Z2 is categorigal in nature, everything else is numeric
+# Target 1 and Target 2 are not mutually exclusive
+
+# Look at missing Data
+sum(apply(data.frame(apply(test, 2, is.na)), 2, sum)) #L6, M6, N6, T6, U6, V6, W6, X6 each have 390 missing values
+
+# Check to see if these columns are missing for the same cases
+missing <- train[is.na(train$M6),]
+apply(data.frame(apply(missing, 2, is.na)), 2, sum)  #L6, M6, N6, T6, U6, V6, W6, X6 each have 390 missing values for the                                                       same cases
+
+#Subset training for hyperparameter tuning
+set.seed(seed)
+train <- data.frame(project_imputed)
+index <- seq(1, nrow(train), 1)
+train_sub_index <- sample(index, ceiling(0.15*nrow(train)))
+train <- train[train_sub_index,]
+
+
+```
+
+## Random Forests- target2
+
+```{r}
+set.seed(seed)
+# Hyperparameters to tune: mtry, ntree, nodesize, possibly sampsize?
+
+############ Tuning mtry ############
+ppv=vector()
+mtry=seq(1,100, 10)
+i=1
+for(m in mtry){
+  # Create model
+  rf = randomForest(factor(target2) ~ .-target1, data=train,mtry=m, ntree=50, type='class')
+  #Create dataframe of results
+  results <- data.frame(numeric(nrow(valid)))
+  results$pred <- predict(rf,valid,type='class')
+  results$target2 <-valid$target2
+  #calculate ppv
+  pos_pred = results %>% filter(pred==1)
+  ppv[i] =  sum(pos_pred$pred==pos_pred$target2)/nrow(pos_pred)
+  i=i+1
+}
+
+plot(mtry, ppv) #mtry 11 is best
+write.csv(data.frame(mtry, ppv),"C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/Random Forest/mtry.csv")
+
+############ Tuning ntrees ############
+ppv=vector()
+ntrees=seq(1,200,25)
+i=1
+for(n in ntrees){
+  # Create model
+  rf = randomForest(factor(target2) ~ .-target1, data=train,ntree=n, type='class')
+  #Create dataframe of results
+  results <- data.frame(numeric(nrow(valid)))
+  results$pred <- predict(rf,valid,type='class')
+  results$target2 <-valid$target2
+  #calculate ppv
+  pos_pred = results %>% filter(pred==1)
+  ppv[i] =  sum(pos_pred$pred==pos_pred$target2)/nrow(pos_pred)
+  i=i+1
+  print(i)
+}
+
+plot(ntrees, ppv)
+write.csv(data.frame(ntrees, ppv),"C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/Random Forest/ntrees.csv")
+
+
+############ Tuning nodesize ############
+ppv=vector()
+nodesize=seq(1,10,2)
+i=1
+for(n in nodesize){
+  # Create model
+  rf = randomForest(factor(target2) ~ .-target1, data=train,nodesize=n, ntree=50, type='class')
+  #Create dataframe of results
+  results <- data.frame(numeric(nrow(valid)))
+  results$pred <- predict(rf,valid,type='class')
+  results$target2 <-valid$target2
+  #calculate ppv
+  pos_pred = results %>% filter(pred==1)
+  ppv[i] =  sum(pos_pred$pred==pos_pred$target2)/nrow(pos_pred)
+  i=i+1
+  print(i)
+}
+
+plot(nodesize, ppv)
+write.csv(data.frame(nodesize, ppv),
+          "C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/Random Forest/nodesize.csv")
+
+
+# Run final model to get validation ppv
+train <- data.frame(project_imputed)
+# Create model
+rf = randomForest(factor(target2) ~ .-target1, data=train,
+                  mtry=15, ntree=50, nodesize=7, type='class')
+#Create dataframe of results
+results <- data.frame(numeric(nrow(valid)))
+results$pred <- predict(rf,valid,type='class')
+results$target2 <-valid$target2
+#calculate ppv
+pos_pred = results %>% filter(pred==1)
+ppv = sum(pos_pred$pred==pos_pred$target2)/nrow(pos_pred)
+accuracy <- mean(results$pred==results$target2)
+```
+
+
+## Gradient Boosting- target2
+
+```{r}
+library('xgboost')
+seed <- 84553
+
+
+load("C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/Data/MLProjectData_missings_imputed.RData")
+#Subset training for hyperparameter tuning
+set.seed(seed)
+train <- data.frame(project_imputed)
+index <- seq(1, nrow(train), 1)
+train_sub_index <- sample(index, ceiling(0.15*nrow(train)))
+train <- train[train_sub_index,]
+
+#Convert into numeric
+#train$Z2 <- as.numeric(train$Z2)
+
+#Create Dmatrix for training
+#dtrain <- xgb.DMatrix(label = as.factor(select(train, target2)$target2),
+                      #data = as.matrix(select(train, -c(target1, target2))))
+
+library('Matrix')
+xtrain = model.matrix(as.factor(target2) ~ .-target1, data=train)
+xtest = model.matrix(as.factor(target2)  ~ . -target1, data=valid)
+ytrain = as.numeric(levels(as.factor(train$target2)))[as.factor(train$target2)]
+ytest = as.numeric(levels(as.factor(valid$target2)))[as.factor(valid$target2)]
+
+xgb <- xgboost(data = xtrain,
+               label = ytrain,
+               eta = 0.05,
+               max_depth = 15,
+               gamma = 0.1,
+               nround=100,
+               subsample = 0.75,
+               colsample_bylevel = 0.75,
+               objective = "multi:softmax",
+               num_class=2,
+               nthread = 3,
+               eval_metric = 'merror',
+               verbose =0)
+predict(xgb, xtrain)
+
+################### Tuning the Model ###############################
+library(reshape2)
+#############################################
+######### PARAMETERS TO BE SEARCHED #########
+#############################################
+# eta candidates
+eta=c(0.01,.04,.08,0.1,0.25, 0.50, 0.75)
+# colsample_bylevel candidates
+cs=c(0.25,0.50, 0.75, 1)
+# max_depth candidates
+md=c(3,5,7,9)
+# sub_sample candidates
+ss=c(0.25,0.5,0.75,1)
+# fixed number of rounds
+num_rounds=100
+#############################################
+# coordinates of default model in terms of
+# the entries in the vectors above:
+default=c(4,2,2,3)
+
+# Starting with eta#
+# eta candidates eta=c(0.01,.04,.08,0.1,0.25, 0.50, 0.75)
+
+
+# create empty matrices to hold the convergence
+# and prediction results for our search over eta:
+results_df <- data.frame(matrix(ncol = 2, nrow = 0))
+colnames(results_df) <- c("eta", "ppv")
+conv_eta = matrix(NA,num_rounds,length(eta))
+pred_eta = matrix(NA,dim(valid)[1], length(eta))
+word = rep('eta',length(eta))
+colnames(conv_eta) = colnames(pred_eta) = paste(word,eta)
+
+for(i in 1:length(eta)){
+  params=list(eta = eta[i], colsample_bylevel=cs[default[2]],
+              subsample = ss[default[4]], max_depth = md[default[3]],
+              min_child_weight = 1)
+  xgb=xgboost(xtrain, label = ytrain, nrounds = num_rounds, params = params, verbose=0, num_class=2,
+              objective = "multi:softmax", nthread=3)
+  conv_eta[,i] = xgb$evaluation_log$train_merror
+  pred_eta[,i] = predict(xgb, xtest)
+  #Create dataframe of results
+  results <- data.frame(numeric(nrow(xtest)))
+  results$pred <-  predict(xgb, xtest)
+  results$target2 <- ytest
+  #calculate ppv
+  pos_pred = results %>% filter(pred==1)
+  ppv = sum(pos_pred$pred==pos_pred$target2)/nrow(pos_pred)
+  results_df = rbind(results_df, data.frame(eta = eta[i], ppv = ppv))
+}
+
+write.csv(results_df,
+          "C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/XGBoost/eta.csv")
+
+cat('Validation Misclassification Error for Each eta:')
+(1-colMeans(ytest==pred_eta))
+
+# Reshape the data frame so that the eta value is a variable
+# rather than having a column for each eta value:
+conv_eta = data.frame(iter=1:num_rounds, conv_eta)
+conv_eta2 = melt(conv_eta, id.vars = "iter", value.name = 'MisclassificationRate', variable.name = 'eta')
+ggplot(data = conv_eta2) + geom_line(aes(x = iter, y = MisclassificationRate, color = eta))+
+  labs(title = "Convergence on Training for Each Eta")
+ggsave("C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/XGBoost/eta_pic.png")
+############################################# CS ############################################
+# Now with cs#
+# cs candidates c(0.25,0.50, 0.75, 1)
+
+# create empty matrices to hold the convergence
+# and prediction results for our search over cs:
+results_df <- data.frame(matrix(ncol = 2, nrow = 0))
+colnames(results_df) <- c("cs", "ppv")
+conv_cs = matrix(NA,num_rounds,length(cs))
+pred_cs = matrix(NA,dim(valid)[1], length(cs))
+word = rep('cs',length(cs))
+colnames(conv_cs) = colnames(pred_cs) = paste(word,cs)
+
+for(i in 1:length(cs)){
+  params=list(eta = eta[default[1]], colsample_bylevel=cs[i],
+              subsample = ss[default[4]], max_depth = md[default[3]],
+              min_child_weight = 1)
+  xgb=xgboost(xtrain, label = ytrain, nrounds = num_rounds, params = params, verbose=0, num_class=2,
+              objective = "multi:softmax", nthread=3)
+  conv_cs[,i] = xgb$evaluation_log$train_merror
+  pred_cs[,i] = predict(xgb, xtest)
+  #Create dataframe of results
+  results <- data.frame(numeric(nrow(xtest)))
+  results$pred <-  predict(xgb, xtest)
+  results$target2 <- ytest
+  #calculate ppv
+  pos_pred = results %>% filter(pred==1)
+  ppv = sum(pos_pred$pred==pos_pred$target2)/nrow(pos_pred)
+  results_df = rbind(results_df, data.frame(cs = cs[i], ppv = ppv))
+}
+
+write.csv(results_df,
+          "C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/XGBoost/cs.csv")
+
+cat('Validation Misclassification Error for Each cs:')
+(1-colMeans(ytest==pred_cs))
+
+# Reshape the data frame so that the eta value is a variable
+# rather than having a column for each eta value:
+conv_cs = data.frame(iter=1:num_rounds, conv_cs)
+conv_cs2 = melt(conv_cs, id.vars = "iter", value.name = 'MisclassificationRate', variable.name = 'cs')
+ggplot(data = conv_cs2) + geom_line(aes(x = iter, y = MisclassificationRate, color = cs))+
+  labs(title = "Convergence on Training for Each cs")
+ggsave("C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/XGBoost/cs_pic.png")
+############################################# md ############################################
+# Now with md#
+# md candidates c(3,5,7,9)
+
+# create empty matrices to hold the convergence
+# and prediction results for our search over md:
+results_df <- data.frame(matrix(ncol = 2, nrow = 0))
+colnames(results_df) <- c("md", "ppv")
+conv_md = matrix(NA,num_rounds,length(md))
+pred_md = matrix(NA,dim(valid)[1], length(md))
+word = rep('md',length(md))
+colnames(conv_md) = colnames(pred_md) = paste(word,md)
+
+for(i in 1:length(md)){
+  params=list(eta = eta[default[1]], colsample_bylevel=cs[default[2]],
+              subsample = ss[default[4]], max_depth = md[i],
+              min_child_weight = 1)
+  xgb=xgboost(xtrain, label = ytrain, nrounds = num_rounds, params = params, verbose=0, num_class=2,
+              objective = "multi:softmax", nthread=3)
+  conv_md[,i] = xgb$evaluation_log$train_merror
+  pred_md[,i] = predict(xgb, xtest)
+  #Create dataframe of results
+  results <- data.frame(numeric(nrow(xtest)))
+  results$pred <-  predict(xgb, xtest)
+  results$target2 <- ytest
+  #calculate ppv
+  pos_pred = results %>% filter(pred==1)
+  ppv = sum(pos_pred$pred==pos_pred$target2)/nrow(pos_pred)
+  results_df = rbind(results_df, data.frame(md = md[i], ppv = ppv))
+}
+
+write.csv(results_df,
+          "C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/XGBoost/md.csv")
+
+cat('Validation Misclassification Error for Each md:')
+(1-colMeans(ytest==pred_md))
+
+# Reshape the data frame so that the eta value is a variable
+# rather than having a column for each eta value:
+conv_md = data.frame(iter=1:num_rounds, conv_md)
+conv_md2 = melt(conv_md, id.vars = "iter", value.name = 'MisclassificationRate', variable.name = 'md')
+ggplot(data = conv_md2) + geom_line(aes(x = iter, y = MisclassificationRate, color = md))+
+  labs(title = "Convergence on Training for Each md")
+ggsave("C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/XGBoost/md_pic.png")
+
+############################################# ss ############################################
+# Now with ss#
+# ss candidates ss=c(0.25,0.5,0.75,1)
+
+# create empty matrices to hold the convergence
+# and prediction results for our search over ss:
+results_df <- data.frame(matrix(ncol = 2, nrow = 0))
+colnames(results_df) <- c("ss", "ppv")
+conv_ss = matrix(NA,num_rounds,length(ss))
+pred_ss = matrix(NA,dim(valid)[1], length(ss))
+word = rep('ss',length(ss))
+colnames(conv_ss) = colnames(pred_ss) = paste(word,ss)
+
+for(i in 1:length(ss)){
+  params=list(eta = eta[default[1]], colsample_bylevel=cs[default[2]],
+              subsample = ss[i], max_depth = md[default[3]],
+              min_child_weight = 1)
+  xgb=xgboost(xtrain, label = ytrain, nrounds = num_rounds, params = params, verbose=0, num_class=2,
+              objective = "multi:softmax", nthread=3)
+  conv_ss[,i] = xgb$evaluation_log$train_merror
+  pred_ss[,i] = predict(xgb, xtest)
+  #Create dataframe of results
+  results <- data.frame(numeric(nrow(xtest)))
+  results$pred <-  predict(xgb, xtest)
+  results$target2 <- ytest
+  #calculate ppv
+  pos_pred = results %>% filter(pred==1)
+  ppv = sum(pos_pred$pred==pos_pred$target2)/nrow(pos_pred)
+  results_df = rbind(results_df, data.frame(ss = ss[i], ppv = ppv))
+}
+
+write.csv(results_df,
+          "C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/XGBoost/ss.csv")
+
+cat('Validation Misclassification Error for Each md:')
+(1-colMeans(ytest==pred_md))
+
+# Reshape the data frame so that the eta value is a variable
+# rather than having a column for each eta value:
+conv_ss = data.frame(iter=1:num_rounds, conv_ss)
+conv_ss2 = melt(conv_ss, id.vars = "iter", value.name = 'MisclassificationRate', variable.name = 'ss')
+ggplot(data = conv_ss2) + geom_line(aes(x = iter, y = MisclassificationRate, color = ss))+
+  labs(title = "Convergence on Training for Each ss")
+ggsave("C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/XGBoost/ss_pic.png")
+
+
+
+###### Run best model and get predictions #####
+xgb_best <- xgboost(data = xtrain,
+                    label = ytrain,
+                    eta = 0.01,
+                    max_depth = 20,
+                    nround=200,
+                    subsample = 0.25,
+                    colsample_bylevel = 0.75,
+                    objective = "multi:softmax",
+                    num_class=2,
+                    nthread = 5,
+                    eval_metric = 'merror',
+                    verbose =0)
+#Create dataframe of results
+results <- data.frame(numeric(nrow(xtest)))
+results$pred <-  predict(xgb_best, xtest)
+results$target2 <- ytest
+#calculate missclassification
+mclass <- mean(results$pred != results$target2)
+#calculate ppv
+pos_pred = results %>% filter(pred==1)
+ppv = sum(pos_pred$pred==pos_pred$target2)/nrow(pos_pred)
+results_df = data.frame(mclass = mclass, ppv = ppv)
+print(results_df)
+
+```
+
+## Ridge/Lasso/Elastic Net - Check for collinearity
+```{r}
+X_train=model.matrix(factor(target2)~.-target1-Z2+factor(Z2) ,data=project_imputed)[,-1]
+y_train = factor(project_imputed$target2)
+X_valid=model.matrix(factor(target2)~.-target1-Z2+factor(Z2) ,data=valid)[,-1]
+y_valid = factor(valid$target2)
+
+# Loop through correlation matrix and record correlations greater than 0.6 in cor vector
+cor_matrix <- cor(X_train)
+c <- 1
+cor <- c()
+for (i in 1:nrow(cor_matrix)) {
+  for (j in 1:ncol(X)) {
+    if (abs(cor_matrix[i,j]) > 0.75) {
+      cor[c] <- cor_matrix[i,j]
+      c <- c+1
+    }
+  }
+}
+
+# There is correlation above 0.75 -> let's try Ridge regression
+
+```
+
+## Ridge Regression
+
+```{r pressure, echo=FALSE}
+library(glmnet)
+set.seed(seed)
+
+# Run cross validation, using auc as the scoring metric to optimize
+cv.out = cv.glmnet(X_train, y_train, alpha=0, type.measure="auc", family = "binomial")
+plot(cv.out)
+
+#Calculate best lambda
+bestlambda=cv.out$lambda.min # equals 0.01333996
+bestlambda
+(ridge.mod.betas = coef(cv.out, s=bestlambda))
+#pred.ridge = predict(cv.out, s=bestlambda, newx=X_valid, type="response")
+
+# Calculate KS statistic
+pred <- prediction(predict(cv.out, s=bestlambda, newx=X_train, type="response"), y_train)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+KS <- max(perf@y.values[[1]] - perf@x.values[[1]])
+cutoffAtKS <- unlist(perf@alpha.values)[which.max(perf@y.values[[1]] - perf@x.values[[1]])] #cutof is 0.17035
+
+#Calculate ppv based on cutoff determined from KS Statistic
+r_results <- data.frame(
+              pred = as.numeric(predict(cv.out, s=bestlambda, newx=X_valid, type="response")>cutoffAtKS),
+              target2 = y_valid
+)
+pos_pred = r_results %>% filter(pred==1)
+ppv = sum(pos_pred$pred==pos_pred$target2)/nrow(pos_pred)
+
+#Calculate missclassification
+missclass <- 1-mean(r_results$pred==r_results$target2)
+
+#Record results
+final_ridge <- data.frame(
+            ppv = ppv,
+            missclass = missclass,
+            cutoff = cutoffAtKS,
+            lambda = bestlambda)
+write.csv(final_ridge,
+          "C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/ridge.csv")
+
+# To predict on test set (don't use this unless we decide this model is best... it's not though)
+#final <- glmnet(X_full,y_full,alpha=0,lambda=0.01333996)
+#as.numeric(predict(final, s=0.01333996, newx=X[test,], type = "response")>0.17035)
+
+```
+
+## LASSO Regression
+
+```{r pressure, echo=FALSE}
+library(glmnet)
+set.seed(seed)
+
+# Run cross validation, using auc as the scoring metric to optimize
+cv.out.lasso = cv.glmnet(X_train, y_train, alpha=1, type.measure="auc", family = "binomial")
+plot(cv.out.lasso)
+
+#Calculate best lambda
+bestlambda=cv.out.lasso$lambda.min
+bestlambda
+(lasso.mod.betas = coef(cv.out.lasso, s=bestlambda))
+pred.ridge = predict(cv.out.lasso, s=bestlambda, newx=X_valid, type="response")
+
+# Calculate KS statistic
+pred <- prediction(predict(cv.out.lasso, s=bestlambda, newx=X_train, type="response"), y_train)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+KS <- max(perf@y.values[[1]] - perf@x.values[[1]])
+cutoffAtKS <- unlist(perf@alpha.values)[which.max(perf@y.values[[1]] - perf@x.values[[1]])]
+
+#Calculate ppv based on cutoff determined from KS Statistic
+l_results <- data.frame(
+  pred = as.numeric(predict(cv.out.lasso, s=bestlambda, newx=X_valid, type="response")>cutoffAtKS),
+  target2 = y_valid
+)
+pos_pred = l_results %>% filter(pred==1)
+ppv_l = sum(pos_pred$pred==pos_pred$target2)/nrow(pos_pred)
+
+#Calculate missclassification
+missclass_l <- 1-mean(l_results$pred==l_results$target2)
+
+#Record results
+final_lasso <- data.frame(
+  ppv = ppv_l,
+  missclass = missclass_l,
+  cutoff = cutoffAtKS,
+  lambda = bestlambda)
+write.csv(final_lasso,
+          "C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/lasso.csv")
+
+# To predict on test set (don't use this unless we decide this model is best... it's not though)
+#final <- glmnet(X_full,y_full,alpha=1,lambda=)
+#as.numeric(predict(final, s=, newx=X[test,], type = "response")>)
+
+```
+
+## Elastic Net Regression
+
+```{r pressure, echo=FALSE}
+set.seed(seed)
+
+#Set alphas to loop over
+alphas <- c(0.25, 0.5, 0.75)
+
+#Initalize dataframe for results
+elastic_results <- data.frame(matrix(ncol = 5, nrow = 0))
+
+for (alpha in alphas) {
+  # Run cross validation, using auc as the scoring metric to optimize
+  cv.out = cv.glmnet(X_train, y_train, alpha=alpha, type.measure="auc", family = "binomial")
+  plot(cv.out)
+  
+  #Calculate best lambda
+  bestlambda=cv.out$lambda.min
+  bestlambda
+  #elastic.mod.betas = coef(cv.out, s=bestlambda)
+ # pred.elastic = predict(cv.out, s=bestlambda, newx=X_valid, type="response")
+  
+  # Calculate KS statistic
+  pred <- prediction(predict(cv.out, s=bestlambda, newx=X_train, type="response"), y_train)
+  perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+  KS <- max(perf@y.values[[1]] - perf@x.values[[1]])
+  cutoffAtKS <- unlist(perf@alpha.values)[which.max(perf@y.values[[1]] - perf@x.values[[1]])]
+  
+  #Calculate ppv based on cutoff determined from KS Statistic
+  results <- data.frame(
+                pred = as.numeric(predict(cv.out, s=bestlambda, newx=X_valid, type="response")>cutoffAtKS),
+                target2 = y_valid
+  )
+  pos_pred = results %>% filter(pred==1)
+  ppv = sum(pos_pred$pred==pos_pred$target2)/nrow(pos_pred)
+  
+  #Calculate missclassification
+  missclass <- 1-mean(results$pred==results$target2)
+  
+  final <- data.frame(
+            alpha = alpha,
+            ppv = ppv,
+            missclass = missclass,
+            cutoff = cutoffAtKS,
+            lambda = bestlambda
+  )
+  
+  elastic_results <- rbind(elastic_results, final)
+
+}
+
+
+write.csv(elastic_results,
+          "C:/Users/Jackson Cabell/Documents/Homework/Machine Learning/elastic.csv")
+
+
+# To predict on test set (don't use this unless we decide this model is best... it's not though)
+#final <- glmnet(X_full,y_full,alpha=0.25,lambda=)
+#as.numeric(predict(final, s=, newx=X[test,], type = "response")>)
+
+```
+
